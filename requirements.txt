@@ -1,0 +1,6 @@
+# Versiones fijadas y verificadas en pypi.org (todas con más de dos semanas de antigüedad).
+# curl_cffi: peticiones HTTP con huella de navegador real. El resto son sus dependencias.
+curl_cffi==0.16.3
+cffi==2.1.1
+certifi==2026.7.22
+pycparser==3.0

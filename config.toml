@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Vigilante PS5 Pro · configuración
+# Edítalo en GitHub (icono del lápiz) y guarda con "Commit changes".
+# El cambio se aplica en la siguiente ejecución.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Avisa cuando la consola esté en stock o en reserva a este precio o menos.
+# PVP oficial actual: 899,99 €. Si Sony lo cambia, ajusta esta cifra.
+precio_maximo = 900.0
+
+# Por debajo de este precio el aviso llega igual, pero con advertencia
+# (puede haber leído otro producto, como el lector de discos).
+precio_minimo_logico = 600.0
+
+# false = ignora vendedores externos (marketplace) aunque estén dentro de precio.
+permitir_marketplace = false
+
+# Hora de Madrid a partir de la cual llega el resumen diario (-1 lo desactiva).
+hora_resumen_diario = 9
+
+# Si una página trae varios productos, se elige el que lleve esta palabra en el nombre.
+palabra_clave = "pro"
+
+# Frases que se buscan en la página SOLO si la tienda no publica datos estructurados.
+texto_disponible = ["añadir a la cesta", "añadir al carrito", "comprar ahora"]
+texto_agotado = ["agotado", "sin stock", "sin existencias", "fuera de stock", "no disponible"]
+
+# ── Tiendas ─────────────────────────────────────────────────────────────────
+# nombre             cómo aparece en los avisos
+# url                ficha exacta de la consola (no la búsqueda ni la categoría)
+# vendedores_propios nombres que cuentan como venta directa de la tienda
+# activa             false para pausarla sin borrarla
+# Para añadir otra tienda, copia un bloque [[tiendas]] completo.
+# Amazon no está: Keepa lo vigila mejor y Amazon bloquea este tipo de accesos.
+
+[[tiendas]]
+nombre = "PlayStation Direct"
+url = "https://direct.playstation.com/es-es/buy-consoles/playstation5-pro-console-2-tb"
+vendedores_propios = ["PlayStation", "Sony"]
+activa = true
+
+[[tiendas]]
+nombre = "MediaMarkt"
+url = "https://www.mediamarkt.es/es/product/_consola-sony-ps5-pro-2025-2-tb-ssd-4k-spectral-super-resolution-pssr-1-mando-digital-sin-lector-de-discos-blanco-1607133.html"
+vendedores_propios = ["MediaMarkt"]
+activa = true
+
+[[tiendas]]
+nombre = "PcComponentes"
+url = "https://www.pccomponentes.com/sony-playstation-5-pro"
+vendedores_propios = ["PcComponentes"]
+activa = true
+
+[[tiendas]]
+nombre = "Carrefour"
+url = "https://www.carrefour.es/consola-playstation-5-pro-v2-2tb/VC4A-31761813/p"
+vendedores_propios = ["Carrefour"]
+activa = true
+
+# Pega la URL de la ficha y cambia activa a true:
+[[tiendas]]
+nombre = "El Corte Inglés"
+url = "https://www.elcorteingles.es/videojuegos/A200071568-consola-playstation-5-pro/"
+vendedores_propios = ["El Corte Inglés"]
+activa = true
+
+[[tiendas]]
+nombre = "GAME"
+url = "https://www.game.es/playstation-5-modelo-pro/236300"
+vendedores_propios = ["GAME"]
+activa = true
