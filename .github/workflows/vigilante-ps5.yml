@@ -1,46 +1,53 @@
-# Vigilante PS5 Pro: revisa las tiendas cada 10 minutos y avisa por Telegram.
+# Vigilante PS5 Pro: revisa las tiendas cada 10 minutos, 24 horas, 7 días, y avisa por Telegram.
 # Ruta dentro del repositorio: .github/workflows/vigilante-ps5.yml
 #
 # Notas:
-# - El cron va en UTC; el intervalo de 10 minutos no depende de la zona horaria.
-# - GitHub puede retrasar las ejecuciones programadas en horas de mucha carga.
-# - En repositorios públicos, GitHub pausa los cron tras 60 días sin commits:
-#   se reactivan en la pestaña Actions con "Enable workflow".
+# - El cron de GitHub es "best effort": con mucha carga puede retrasar o saltarse rondas.
+#   Para puntualidad garantizada, lánzalo desde fuera (cron-job.org) vía workflow_dispatch
+#   con origen=cron, y cambia el primer cron por "17 * * * *" para dejar GitHub de respaldo.
+# - El job "latido" hace un commit mínimo cada lunes: sin actividad, GitHub pausa los cron
+#   de los repositorios públicos a los 60 días.
 # - Las Actions van fijadas por SHA (versión exacta e inmutable).
- 
+
 name: Vigilante PS5 Pro
- 
+
 on:
   schedule:
-    - cron: "4,14,24,34,44,54 * * * *"
-  workflow_dispatch: {}  # botón "Run workflow" para lanzarlo a mano
- 
+    - cron: "4,14,24,34,44,54 * * * *"  # cada 10 minutos, a cualquier hora, todos los días
+    - cron: "41 3 * * 1"                # latido semanal (lunes, 03:41 UTC)
+  workflow_dispatch:
+    inputs:
+      origen:
+        description: "Déjalo en 'manual' para recibir el resumen de prueba"
+        required: false
+        default: "manual"
+        type: string
+
 permissions:
-  contents: read  # solo lectura: el workflow no puede modificar el repositorio
- 
-concurrency:
-  group: vigilante-ps5
-  cancel-in-progress: false
- 
+  contents: read  # por defecto, solo lectura
+
 jobs:
   revisar:
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    concurrency:  # nunca dos revisiones a la vez, para no duplicar avisos
+      group: vigilante-ps5
+      cancel-in-progress: false
     steps:
       - name: Descargar el código
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
- 
+
       - name: Preparar Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
- 
+
       - name: Instalar dependencias fijadas
         run: python -m pip install --disable-pip-version-check -r requirements.txt
- 
+
       - name: Recuperar el estado de la ejecución anterior
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -48,17 +55,36 @@ jobs:
           key: vigilante-estado-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             vigilante-estado-
- 
+
       - name: Revisar tiendas y avisar
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ORIGEN: ${{ inputs.origen }}
         run: python vigilante.py
- 
+
       - name: Guardar el estado para la próxima ejecución
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: state.json
           key: vigilante-estado-${{ github.run_id }}-${{ github.run_attempt }}
- 
+
+  latido:
+    if: github.event_name == 'schedule' && github.event.schedule == '41 3 * * 1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: write  # único job con escritura: solo actualiza .github/latido.txt
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Registrar el latido semanal
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/latido.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/latido.txt
+          git commit -m "Latido semanal: evita que GitHub pause el cron por inactividad"
+          git push
