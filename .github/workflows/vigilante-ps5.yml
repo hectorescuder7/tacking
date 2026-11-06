@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       origen:
-        description: "Déjalo en 'manual' para recibir el resumen de prueba"
+        description: "manual = resumen de prueba · simulacro = ejemplo del aviso de stock"
         required: false
         default: "manual"
         type: string
@@ -61,6 +61,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ORIGEN: ${{ inputs.origen }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}  # opcional: solo lo usan las tiendas con usar_proxy = true
         run: python vigilante.py
 
       - name: Guardar el estado para la próxima ejecución
