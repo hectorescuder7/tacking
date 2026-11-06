@@ -47,7 +47,7 @@ activa = true
 
 [[tiendas]]
 nombre = "PcComponentes"
-url = "https://www.pccomponentes.com/sony-playstation-5-pro"
+url = "https://www.pccomponentes.com/sony-playstation-5-pro-con-nuevo-dualsense"
 vendedores_propios = ["PcComponentes"]
 activa = true
 
@@ -56,6 +56,13 @@ nombre = "Carrefour"
 url = "https://www.carrefour.es/consola-playstation-5-pro-v2-2tb/VC4A-31761813/p"
 vendedores_propios = ["Carrefour"]
 activa = true
+
+[[tiendas]]
+nombre = "Carrefour 2"
+url = "https://www.carrefour.es/consola-playstation-5-pro-digital-2tb-blanco/VC4A-28690379/p"
+vendedores_propios = ["Carrefour"]
+activa = true
+
 
 # Pega la URL de la ficha y cambia activa a true:
 [[tiendas]]
