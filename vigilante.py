@@ -7,6 +7,8 @@ En cada ejecución revisa las tiendas de config.toml y avisa por Telegram de:
   - un resumen diario con el estado de cada tienda (y siempre en las ejecuciones manuales).
 El estado entre ejecuciones se guarda en state.json, que GitHub conserva en su caché.
 Los datos de Telegram llegan por variables de entorno (secretos de GitHub), nunca en el código.
+Las ejecuciones lanzadas desde fuera (cron-job.org) llegan con ORIGEN=cron y cuentan como
+programadas: no generan el resumen de prueba de las ejecuciones manuales.
 """
 
 from __future__ import annotations
@@ -156,7 +158,9 @@ def main(ahora: datetime | None = None) -> int:
         return 1
 
     ahora = ahora or datetime.now(ZONA)
-    manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    evento, origen = os.environ.get("GITHUB_EVENT_NAME", "local"), os.environ.get("ORIGEN") or "manual"
+    manual = evento == "workflow_dispatch" and origen != "cron"
+    print(f"Evento: {evento} · origen: {origen if evento == 'workflow_dispatch' else '-'}")
     previo = cargar_estado()
     previas: dict = previo.get("oportunidades", {})
 
