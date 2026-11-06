@@ -76,3 +76,59 @@ nombre = "GAME"
 url = "https://www.game.es/playstation-5-modelo-pro/236300"
 vendedores_propios = ["GAME"]
 activa = true
+
+[[tiendas]]
+nombre = "Fnac"
+url = "https://www.fnac.es/Consola-PS5-Pro-2TB-Videoconsola-Consola/a11330242"
+vendedores_propios = ["Fnac"]
+aviso = "comprueba que lo vende Fnac y no un vendedor externo"
+activa = true
+
+[[tiendas]]
+nombre = "Fnac (modelo 2025)"
+url = "https://www.fnac.es/Consola-PlayStation-5-Pro-2-TB-Videoconsola-Consola/a12439688"
+vendedores_propios = ["Fnac"]
+aviso = "comprueba que lo vende Fnac y no un vendedor externo"
+activa = true
+
+[[tiendas]]
+nombre = "Fnac pack FC 26"
+url = "https://www.fnac.es/Consola-PS5-Pro-2TB-EA-Sports-FC-26-Codigo-de-descarga-Videoconsola-Consola/a12439651"
+vendedores_propios = ["Fnac"]
+precio_maximo = 960.0  # consola + juego: ajústalo al PVP del pack
+aviso = "es el pack con EA Sports FC 26"
+activa = true
+
+[[tiendas]]
+nombre = "Fnac pack con lector"
+url = "https://www.fnac.es/Consola-PS5-Pro-2TB-Unidad-de-disco-externa-Exclusivo-Online-Videoconsola-Consola/a11692720"
+vendedores_propios = ["Fnac"]
+precio_maximo = 1000.0  # consola + unidad de disco: ajústalo al PVP del pack
+aviso = "es el pack con unidad de disco"
+activa = true
+
+[[tiendas]]
+nombre = "Xtralife"
+url = "https://www.xtralife.com/producto/consola-ps5-pro-digital-2-tb-2025-ps5-ps5-pro/106943"
+vendedores_propios = ["Xtralife"]
+activa = true
+
+[[tiendas]]
+nombre = "Movistar"
+url = "https://www.movistar.es/gaming/playstation5-pro/"
+vendedores_propios = ["Movistar", "Telefónica"]
+activa = true
+
+# Pega la URL de la ficha y cambia activa a true:
+[[tiendas]]
+nombre = "PCcomponents"
+url = "https://www.pccomponentes.com/sony-playstation-5-pro"
+vendedores_propios = ["PCcomponentes"]
+activa = true
+
+[[tiendas]]
+nombre = "Alcampo"
+url = ""
+vendedores_propios = ["Alcampo"]
+activa = false
+
