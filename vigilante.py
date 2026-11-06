@@ -2,13 +2,13 @@
 Vigilante de stock de la PS5 Pro a precio oficial (pensado para GitHub Actions).
 
 En cada ejecución revisa las tiendas de config.toml y avisa por Telegram de:
-  - oportunidades nuevas (en stock o en reserva a precio <= máximo, vendida por la tienda),
-  - oportunidades que desaparecen, para no ir a buscarla en balde,
-  - un resumen diario con el estado de cada tienda (y siempre en las ejecuciones manuales).
-El estado entre ejecuciones se guarda en state.json, que GitHub conserva en su caché.
-Los datos de Telegram llegan por variables de entorno (secretos de GitHub), nunca en el código.
+  - stock nuevo (en stock o en reserva a precio <= máximo): aviso destacado y CON sonido,
+  - stock que desaparece: aviso breve y silencioso, para no ir a buscarla en balde,
+  - un resumen diario silencioso con el estado de cada tienda (también en ejecuciones manuales).
+Con ORIGEN=simulacro solo envía un ejemplo del aviso de stock, sin revisar tiendas.
 Las ejecuciones lanzadas desde fuera (cron-job.org) llegan con ORIGEN=cron y cuentan como
-programadas: no generan el resumen de prueba de las ejecuciones manuales.
+programadas. El estado entre ejecuciones se guarda en state.json (caché de GitHub).
+Los datos de Telegram y del proxy llegan por variables de entorno (secretos), nunca en el código.
 """
 
 from __future__ import annotations
@@ -45,13 +45,19 @@ def cargar_config() -> dict:
                            ("permitir_marketplace", False), ("hora_resumen_diario", 9)):
         config.setdefault(clave, defecto)
     tiendas = [t for t in config.get("tiendas", []) if t.get("activa", True) and t.get("url")]
+    nombres = set()
     for tienda in tiendas:
         if not str(tienda["url"]).startswith("https://"):
             raise ValueError(f"la URL de {tienda.get('nombre', '?')} debe empezar por https://")
         tienda.setdefault("nombre", tienda["url"])
+        if tienda["nombre"] in nombres:
+            raise ValueError(f"hay dos tiendas llamadas '{tienda['nombre']}': cada nombre debe ser único")
+        nombres.add(tienda["nombre"])
     if not tiendas:
         raise ValueError("no hay ninguna tienda activa con URL")
     config["tiendas"] = tiendas
+    config["maximos"] = {t["nombre"]: float(t.get("precio_maximo", config["precio_maximo"])) for t in tiendas}
+    config["avisos"] = {t["nombre"]: t["aviso"] for t in tiendas if t.get("aviso")}
     return config
 
 
@@ -66,6 +72,10 @@ def cargar_estado() -> dict:
         return {}
 
 
+def maximo_de(nombre: str, config: dict) -> float:
+    return config.get("maximos", {}).get(nombre, float(config["precio_maximo"]))
+
+
 def es_oportunidad(lectura: Lectura, config: dict) -> bool:
     if lectura.estado == "cola":
         return True
@@ -73,7 +83,7 @@ def es_oportunidad(lectura: Lectura, config: dict) -> bool:
         return False
     if lectura.vendedor_externo and not config["permitir_marketplace"]:
         return False
-    return lectura.precio is None or lectura.precio <= float(config["precio_maximo"])
+    return lectura.precio is None or lectura.precio <= maximo_de(lectura.tienda, config)
 
 
 def euros(valor: float | None) -> str:
@@ -83,13 +93,27 @@ def euros(valor: float | None) -> str:
     return f"{entero.replace(',', '.')},{decimales} €"
 
 
+def minutos_desde(marca: str | None, ahora: datetime) -> int | None:
+    """Minutos transcurridos desde una marca ISO guardada en el estado (None si no hay)."""
+    if not marca:
+        return None
+    try:
+        return max(0, round((ahora - datetime.fromisoformat(marca)).total_seconds() / 60))
+    except (TypeError, ValueError):
+        return None
+
+
 def bloque_alerta(lectura: Lectura, config: dict) -> str:
-    """Texto de aviso para una tienda con oportunidad."""
+    """Bloque de una tienda dentro del aviso de stock."""
     e = html.escape
+    nombre, enlace = e(lectura.tienda.upper()), e(lectura.url, quote=True)
     if lectura.estado == "cola":
-        cuerpo = "cola virtual activa: suele indicar reposición, entra ya"
+        lineas = [f"🟡 <b>{nombre}</b>", "⏳ Cola virtual activa: suele indicar reposición",
+                  f'👉 <a href="{enlace}"><b>ENTRAR EN LA COLA</b></a>']
     else:
-        cuerpo = f"{euros(lectura.precio)} · {DESCRIPCION[lectura.estado]}"
+        estado = "EN STOCK" if lectura.estado == "disponible" else "EN RESERVA"
+        lineas = [f"✅ <b>{nombre}</b>", f"💶 <b>{e(euros(lectura.precio))}</b> · {estado}",
+                  f'👉 <a href="{enlace}"><b>COMPRAR AHORA</b></a>']
     avisos = []
     if lectura.precio is not None and lectura.precio < float(config["precio_minimo_logico"]):
         avisos.append("precio anormalmente bajo: comprueba que sea la consola")
@@ -99,10 +123,28 @@ def bloque_alerta(lectura: Lectura, config: dict) -> str:
         avisos.append(f"vendedor externo: {lectura.vendedor}")
     if lectura.fuente == "texto":
         avisos.append("detectado por el texto de la página, confírmalo")
-    lineas = [f"<b>{e(lectura.tienda)}</b>: {e(cuerpo)}"]
-    if avisos:
-        lineas.append("⚠️ " + e("; ".join(avisos)))
-    lineas.append(f'<a href="{e(lectura.url, quote=True)}">Abrir ficha</a>')
+    if lectura.tienda in config.get("avisos", {}):
+        avisos.append(config["avisos"][lectura.tienda])
+    lineas += [f"⚠️ {e(a)}" for a in avisos]
+    return "\n".join(lineas)
+
+
+def mensaje_alerta(lecturas: list[Lectura], config: dict, ahora: datetime, simulacro: bool = False) -> str:
+    """Aviso de stock: el único mensaje con sonido, diseñado para verse de un vistazo."""
+    cabecera = "🟢🟢🟢 <b>¡HAY STOCK DE PS5 PRO!</b> 🟢🟢🟢\n🚨 <b>CORRE: suele agotarse en minutos</b> 🚨"
+    if simulacro:
+        cabecera = "🧪 <b>SIMULACRO</b> · así llegará el aviso real\n\n" + cabecera
+    cuerpo = "\n\n".join(bloque_alerta(lec, config) for lec in lecturas)
+    return f"{cabecera}\n\n{cuerpo}\n\n⏱️ Detectado a las {ahora:%H:%M}"
+
+
+def mensaje_fin(nombres: list[str], previas: dict, ahora: datetime) -> str:
+    """Aviso silencioso de que el stock avisado ya no está."""
+    lineas = []
+    for nombre in nombres:
+        minutos = minutos_desde(previas.get(nombre, {}).get("desde"), ahora)
+        hace = f" (lo detecté hace {minutos} min)" if minutos is not None else ""
+        lineas.append(f"🔴 <b>{html.escape(nombre)}</b>: se acabó{hace}")
     return "\n".join(lineas)
 
 
@@ -115,7 +157,7 @@ def linea_resumen(lectura: Lectura, config: dict) -> str:
         partes = [DESCRIPCION.get(lectura.estado, lectura.estado)]
     if lectura.precio is not None:
         partes.append(euros(lectura.precio))
-    if comprable and lectura.precio is not None and lectura.precio > float(config["precio_maximo"]):
+    if comprable and lectura.precio is not None and lectura.precio > maximo_de(lectura.tienda, config):
         partes.append("por encima del máximo")
     if lectura.detalle:
         partes.append(lectura.detalle)
@@ -123,7 +165,7 @@ def linea_resumen(lectura: Lectura, config: dict) -> str:
     return f"{marca} <b>{html.escape(lectura.tienda)}</b>: {html.escape(' · '.join(partes))}"
 
 
-def enviar_telegram(texto: str) -> None:
+def enviar_telegram(texto: str, silencioso: bool = False) -> None:
     """Envía un mensaje al chat configurado. Lanza RuntimeError si Telegram no lo acepta."""
     token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
     if len(texto) > LIMITE_TELEGRAM:  # se corta por línea para no romper etiquetas HTML
@@ -132,6 +174,7 @@ def enviar_telegram(texto: str) -> None:
         "chat_id": os.environ["TELEGRAM_CHAT_ID"].strip(),
         "text": texto,
         "parse_mode": "HTML",
+        "disable_notification": silencioso,
         "link_preview_options": {"is_disabled": True},
     }).encode("utf-8")
     peticion = urllib.request.Request(
@@ -159,24 +202,35 @@ def main(ahora: datetime | None = None) -> int:
 
     ahora = ahora or datetime.now(ZONA)
     evento, origen = os.environ.get("GITHUB_EVENT_NAME", "local"), os.environ.get("ORIGEN") or "manual"
-    manual = evento == "workflow_dispatch" and origen != "cron"
     print(f"Evento: {evento} · origen: {origen if evento == 'workflow_dispatch' else '-'}")
+
+    if evento == "workflow_dispatch" and origen == "simulacro":  # solo muestra cómo llega el aviso
+        tienda = config["tiendas"][0]
+        ejemplo = Lectura(tienda=tienda["nombre"], url=tienda["url"], estado="disponible", precio=899.99)
+        try:
+            enviar_telegram(mensaje_alerta([ejemplo], config, ahora, simulacro=True))
+        except RuntimeError as error:
+            print(f"ERROR al enviar el simulacro: {error}")
+            return 1
+        print("Simulacro enviado: no se han revisado tiendas ni tocado el estado.")
+        return 0
+
+    manual = evento == "workflow_dispatch" and origen != "cron"
     previo = cargar_estado()
     previas: dict = previo.get("oportunidades", {})
 
     lecturas = [revisar(tienda, config) for tienda in config["tiendas"]]
     for lec in lecturas:  # registro visible en la pestaña Actions
-        print(f"{lec.tienda:<20} {lec.estado:<12} {euros(lec.precio):<20} {lec.fuente:<10} {lec.detalle}")
+        print(f"{lec.tienda:<24} {lec.estado:<12} {euros(lec.precio):<20} {lec.fuente:<10} {lec.detalle}")
 
     actuales = {lec.tienda: lec for lec in lecturas if es_oportunidad(lec, config)}
-    mensajes = []
+    mensajes: list[tuple[str, bool]] = []  # (texto, silencioso)
     nuevas = [lec for nombre, lec in actuales.items() if previas.get(nombre, {}).get("precio", "-") != lec.precio]
     if nuevas:
-        bloques = "\n\n".join(bloque_alerta(lec, config) for lec in nuevas)
-        mensajes.append("🚨 <b>PS5 Pro a precio oficial</b>\n\n" + bloques)
+        mensajes.append((mensaje_alerta(nuevas, config, ahora), False))
     terminadas = [nombre for nombre in previas if nombre not in actuales]
     if terminadas:
-        mensajes.append("ℹ️ Ya no aparece a precio oficial en: " + html.escape(", ".join(terminadas)))
+        mensajes.append((mensaje_fin(terminadas, previas, ahora), True))
 
     hoy = ahora.date().isoformat()
     hora_resumen = int(config["hora_resumen_diario"])
@@ -184,12 +238,12 @@ def main(ahora: datetime | None = None) -> int:
     if toca_resumen:
         titulo = "🧪 Prueba manual" if manual else "📋 Resumen diario"
         cabecera = f"{titulo} · PS5 Pro (máx. {euros(float(config['precio_maximo']))})"
-        mensajes.append(cabecera + "\n" + "\n".join(linea_resumen(lec, config) for lec in lecturas))
+        mensajes.append((cabecera + "\n" + "\n".join(linea_resumen(lec, config) for lec in lecturas), True))
 
     errores = 0
-    for mensaje in mensajes:
+    for texto, silencioso in mensajes:
         try:
-            enviar_telegram(mensaje)
+            enviar_telegram(texto, silencioso=silencioso)
         except RuntimeError as error:
             print(f"ERROR al avisar por Telegram: {error}")
             errores += 1

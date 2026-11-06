@@ -9,11 +9,15 @@ a qué precio y quién la vende. Orden de fiabilidad:
   3. Frases visibles en la página, solo si no hay datos estructurados.
 Si nada es concluyente, la tienda queda como "desconocido" (no verificable):
 nunca se da por agotada ni por disponible sin pruebas.
+
+Las tiendas con usar_proxy = true salen por el proxy del secreto PROXY_URL
+(opcional, para webs que bloquean a los servidores de GitHub).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -39,13 +43,23 @@ ESTADOS_META = {
     "preorder": "reserva", "pre-order": "reserva", "available for order": "reserva",
     "oos": "agotado", "out of stock": "agotado", "outofstock": "agotado",
 }
-# Frases típicas de las páginas de verificación anti-bots
+# Frases visibles (título o texto) de las páginas de verificación anti-bots
 SENALES_ANTIBOT = (
     "just a moment", "attention required", "access denied", "acceso denegado",
-    "are you a robot", "eres un robot", "verify you are human",
-    "verifica que eres humano", "pardon our interruption", "request unsuccessful",
+    "access to this page has been denied", "are you a robot", "eres un robot",
+    "verify you are human", "verifying you are human", "verifica que eres humano",
+    "press & hold", "press and hold", "pardon our interruption", "request unsuccessful",
+    "checking your browser", "please enable js", "enable javascript and cookies",
+)
+# Huellas en el HTML de los sistemas anti-bots habituales (DataDome, HUMAN, Imperva, Akamai, Kasada, Cloudflare)
+HUELLAS_ANTIBOT = (
+    "captcha-delivery.com", "px-captcha", "_incapsula_resource", "sec-if-cpt",
+    "kpsdk", "/cdn-cgi/challenge-platform/h/", "cf_chl_opt",
 )
 TIPOS_PRODUCTO = {"product", "individualproduct", "productmodel", "productgroup"}
+# Ramas de JSON-LD que describen otros productos (relacionados, accesorios) o reseñas: no se exploran
+CLAVES_AJENAS = {"isrelatedto", "issimilarto", "isaccessoryorsparepartfor", "isconsumablefor",
+                 "itemlistelement", "review", "aggregaterating", "offers"}
 
 
 @dataclass
@@ -178,16 +192,27 @@ def _tipos(nodo: dict) -> set[str]:
 
 
 def _productos(datos: list) -> list[dict]:
-    """Busca nodos Product en la estructura JSON-LD (incluye @graph y variantes)."""
-    encontrados, pendientes = [], list(datos)
-    while pendientes:
-        nodo = pendientes.pop(0)
+    """Busca productos en todo el JSON-LD, de lo más superficial a lo más profundo.
+
+    Vale tanto un nodo Product como cualquier objeto con ofertas (algunas tiendas
+    anidan el producto en otra entidad, p. ej. una acción de compra). Se saltan las
+    ramas de productos relacionados para no confundir la consola con un accesorio.
+    """
+    encontrados, pendientes, vistos = [], [(d, 0) for d in datos], 0
+    while pendientes and vistos < 5000:
+        nodo, nivel = pendientes.pop(0)
+        vistos += 1
         if isinstance(nodo, list):
-            pendientes.extend(nodo)
-        elif isinstance(nodo, dict):
-            if _tipos(nodo) & TIPOS_PRODUCTO:
-                encontrados.append(nodo)
-            pendientes.extend(nodo[c] for c in ("@graph", "mainEntity", "hasVariant") if c in nodo)
+            pendientes.extend((n, nivel) for n in nodo)
+            continue
+        if not isinstance(nodo, dict) or nivel > 8:
+            continue
+        tipos = _tipos(nodo)
+        con_ofertas = isinstance(nodo.get("offers"), (dict, list)) and not tipos & {"offer", "aggregateoffer"}
+        if tipos & TIPOS_PRODUCTO or con_ofertas:
+            encontrados.append(nodo)
+        pendientes.extend((v, nivel + 1) for k, v in nodo.items()
+                          if isinstance(v, (dict, list)) and k.lower() not in CLAVES_AJENAS)
     return encontrados
 
 
@@ -235,9 +260,8 @@ def _vendedor(oferta: dict) -> str | None:
     return None
 
 
-def _aplicar_ofertas(lectura: Lectura, ofertas: list[_Oferta], ajustes: dict) -> None:
+def _aplicar_ofertas(lectura: Lectura, ofertas: list[_Oferta], maximo: float, permitir: bool) -> None:
     """Elige la oferta más relevante: primero una compra válida, luego la más informativa."""
-    maximo, permitir = float(ajustes["precio_maximo"]), bool(ajustes["permitir_marketplace"])
 
     def prioridad(o: _Oferta) -> tuple:
         comprable = o.estado in COMPRABLES
@@ -263,6 +287,7 @@ def analizar_html(html_texto: str, tienda: dict, ajustes: dict) -> Lectura:
     extractor.close()
     propios = [normalizar(v) for v in tienda.get("vendedores_propios", [tienda["nombre"]])]
     palabra = normalizar(tienda.get("palabra_clave", ajustes.get("palabra_clave", "")))
+    maximo = float(tienda.get("precio_maximo", ajustes["precio_maximo"]))
 
     # 1) JSON-LD
     productos = [p for b in extractor.bloques_jsonld for p in _productos(_cargar_jsonld(b)) if p.get("offers")]
@@ -275,7 +300,7 @@ def analizar_html(html_texto: str, tienda: dict, ajustes: dict) -> Lectura:
             externo = bool(vendedor) and not any(p and p in normalizar(vendedor) for p in propios)
             ofertas.append(_Oferta(_estado(o.get("availability")), _precio(o), vendedor, externo))
         if ofertas:
-            _aplicar_ofertas(lectura, ofertas, ajustes)
+            _aplicar_ofertas(lectura, ofertas, maximo, bool(ajustes["permitir_marketplace"]))
             if lectura.estado != "desconocido":
                 lectura.fuente = "json-ld"
                 return lectura
@@ -295,7 +320,9 @@ def analizar_html(html_texto: str, tienda: dict, ajustes: dict) -> Lectura:
 
     # 3) Páginas de bloqueo: mejor "no verificable" que una conclusión falsa
     texto = extractor.texto
-    if any(s in f"{extractor.titulo.lower()} {texto[:3000]}" for s in SENALES_ANTIBOT):
+    huella = html_texto.lower() if len(html_texto) < 300_000 else ""  # los retos anti-bots son páginas pequeñas
+    if any(s in f"{extractor.titulo.lower()} {texto[:3000]}" for s in SENALES_ANTIBOT) or \
+            any(h in huella for h in HUELLAS_ANTIBOT):
         lectura.detalle = "bloqueada por la protección anti-bots de la web"
         return lectura
 
@@ -303,6 +330,8 @@ def analizar_html(html_texto: str, tienda: dict, ajustes: dict) -> Lectura:
     ok = [f for f in tienda.get("texto_disponible", ajustes.get("texto_disponible", [])) if f.lower() in texto]
     ko = [f for f in tienda.get("texto_agotado", ajustes.get("texto_agotado", [])) if f.lower() in texto]
     lectura.precio = precio
+    titulo = re.sub(r"\s+", " ", extractor.titulo).strip()
+    pista = f' (título: "{titulo[:60]}")' if titulo else ""
     if ok and not ko:
         lectura.estado, lectura.fuente = "disponible", "texto"
     elif ko and not ok:
@@ -310,25 +339,33 @@ def analizar_html(html_texto: str, tienda: dict, ajustes: dict) -> Lectura:
     elif ok and ko:
         lectura.detalle = "señales contradictorias en la página"
     elif len(texto) < 200:
-        lectura.detalle = "página casi vacía (la tienda carga los datos con JavaScript)"
+        lectura.detalle = "página casi vacía (la tienda carga los datos con JavaScript)" + pista
     else:
-        lectura.detalle = "sin datos de disponibilidad legibles"
+        lectura.detalle = "sin datos de disponibilidad legibles" + pista
     return lectura
 
 
 def revisar(tienda: dict, ajustes: dict) -> Lectura:
     """Descarga y analiza una ficha. No lanza excepciones: los fallos quedan en la lectura."""
     lectura = Lectura(tienda=tienda["nombre"], url=tienda["url"])
+    opciones = {
+        "impersonate": "chrome",  # huella de navegador real para no ser descartado como bot
+        "headers": {"Accept-Language": "es-ES,es;q=0.9"},
+        "timeout": TIMEOUT_SEGUNDOS,
+        "allow_redirects": True,
+    }
+    via_proxy = bool(tienda.get("usar_proxy"))
+    if via_proxy:
+        proxy = os.environ.get("PROXY_URL", "").strip()
+        if not proxy:
+            lectura.detalle = "usar_proxy activado, pero falta el secreto PROXY_URL"
+            return lectura
+        opciones["proxies"] = {"http": proxy, "https": proxy}
+        opciones["verify"] = bool(ajustes.get("proxy_verificar_tls", True))
     try:
-        respuesta = http.get(
-            tienda["url"],
-            impersonate="chrome",  # huella de navegador real para no ser descartado como bot
-            headers={"Accept-Language": "es-ES,es;q=0.9"},
-            timeout=TIMEOUT_SEGUNDOS,
-            allow_redirects=True,
-        )
-    except Exception as error:  # red caída, DNS, timeout, TLS...
-        lectura.detalle = f"sin respuesta ({type(error).__name__})"
+        respuesta = http.get(tienda["url"], **opciones)
+    except Exception as error:  # red caída, DNS, timeout, TLS... (sin URL ni proxy en el mensaje)
+        lectura.detalle = f"sin respuesta ({type(error).__name__})" + (" vía proxy" if via_proxy else "")
         return lectura
 
     host = (urlparse(str(respuesta.url)).hostname or "").lower()
@@ -339,6 +376,7 @@ def revisar(tienda: dict, ajustes: dict) -> Lectura:
     if respuesta.status_code != 200:
         bloqueo = respuesta.status_code in (401, 403, 429, 503)
         lectura.detalle = f"HTTP {respuesta.status_code}" + (" (probable bloqueo anti-bots)" if bloqueo else "")
+        lectura.detalle += " vía proxy" if via_proxy else ""
         return lectura
 
     contenido = respuesta.content[:MAX_BYTES_PAGINA]
@@ -347,7 +385,10 @@ def revisar(tienda: dict, ajustes: dict) -> Lectura:
     except LookupError:  # codificación desconocida declarada por la web
         html_texto = contenido.decode("utf-8", errors="replace")
     try:
-        return analizar_html(html_texto, tienda, ajustes)
+        resultado = analizar_html(html_texto, tienda, ajustes)
     except Exception as error:  # HTML muy roto: se informa en vez de abortar la ronda
         lectura.detalle = f"no se pudo analizar la página ({type(error).__name__})"
         return lectura
+    if via_proxy and resultado.estado == "desconocido":
+        resultado.detalle += " · vía proxy"
+    return resultado
